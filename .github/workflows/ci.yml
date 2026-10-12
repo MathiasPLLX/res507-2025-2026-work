@@ -38,29 +38,35 @@ jobs:
       - name: Build Docker image
         working-directory: labs/20-containerized-node-app
         run: docker build -t quote-app -f docker/Dockerfile .
-      - name: Run container smoke test
+      - name: Start database and application
+        working-directory: labs/20-containerized-node-app
+        run: docker compose -f docker/compose.ci.yaml up -d --build
+
+      - name: Wait for application health
         run: |
-          docker run -d --name quote-app -p 3000:3000 quote-app
+          # /health must answer 200 with {"ok":true,"db":"up"} (database reachable).
           for attempt in $(seq 1 30); do
-            if curl --fail --silent --show-error \
-              --connect-timeout 1 --max-time 2 \
-              http://localhost:3000/health -o /tmp/quote-app-health.json \
-              && node -e 'const assert = require("node:assert/strict"); const fs = require("node:fs"); assert.equal(JSON.parse(fs.readFileSync("/tmp/quote-app-health.json", "utf8")).ok, true);'; then
-              echo "Health check passed"
+            status=$(curl --silent --connect-timeout 1 --max-time 2 \
+              -o /tmp/quote-app-health.json -w '%{http_code}' \
+              http://localhost:3000/health || true)
+            if [ "$status" = "200" ] \
+              && node -e 'const assert = require("node:assert/strict"); const fs = require("node:fs"); const body = JSON.parse(fs.readFileSync("/tmp/quote-app-health.json", "utf8")); assert.equal(body.ok, true); assert.equal(body.db, "up");'; then
+              echo "Health check passed (application up, database reachable)"
               exit 0
             fi
             sleep 1
           done
-          echo "Health check failed"
+          echo "Health check failed (last HTTP status: $status)"
           exit 1
 
-      - name: Show container diagnostics
+      - name: Show application and database logs
         if: failure()
+        working-directory: labs/20-containerized-node-app
         run: |
-          docker ps -a
-          docker inspect quote-app || true
-          docker logs quote-app || true
+          docker compose -f docker/compose.ci.yaml ps -a
+          docker compose -f docker/compose.ci.yaml logs --no-color
 
-      - name: Stop container
+      - name: Stop services
         if: always()
-        run: docker rm -f quote-app || true
+        working-directory: labs/20-containerized-node-app
+        run: docker compose -f docker/compose.ci.yaml down -v

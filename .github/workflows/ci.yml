@@ -59,6 +59,9 @@ jobs:
           echo "Health check failed (last HTTP status: $status)"
           exit 1
 
+      - name: Verify database-backed quote behaviour
+        run: bash scripts/db-smoke-test.sh
+
       - name: Show application and database logs
         if: failure()
         working-directory: labs/20-containerized-node-app

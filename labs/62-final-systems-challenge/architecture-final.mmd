@@ -1,0 +1,70 @@
+%%{init: {"flowchart": {"defaultRenderer": "elk"}}}%%
+flowchart TB
+  U["Users<br/>(browser / curl)"]
+  DNS["DNS name<br/>quote.example.com"]
+
+  subgraph SITE["On-prem site (single physical location)"]
+    subgraph K3S["k3s cluster: 3 server nodes, embedded etcd (quorum 2 of 3), --secrets-encryption"]
+      direction TB
+      ING["Ingress (Traefik) + TLS"]
+      SVC["Service quote-app :80"]
+      RW["Service quote-db-rw :5432<br/>(always points to the primary)"]
+      SEC["SealedSecret (in Git) → controller →<br/>Secret quote-db-secret (DATABASE_URL)"]
+
+      subgraph N1["Node 1 (VM)"]
+        A1["app Pod 1 :3000<br/>readiness httpGet /health<br/>liveness tcpSocket"]
+        P1["PostgreSQL PRIMARY<br/>(CloudNativePG instance 1)"]
+        V1[("PVC local-path<br/>full copy 1")]
+      end
+      subgraph N2["Node 2 (VM)"]
+        A2["app Pod 2 :3000"]
+        P2["PostgreSQL replica<br/>(instance 2)"]
+        V2[("PVC local-path<br/>full copy 2")]
+      end
+      subgraph N3["Node 3 (VM)"]
+        A3["app Pod 3 :3000"]
+        P3["PostgreSQL replica<br/>(instance 3)"]
+        V3[("PVC local-path<br/>full copy 3")]
+      end
+    end
+  end
+
+  subgraph CLOUD["Cloud provider (off-site)"]
+    OBJ[("Object storage<br/>daily base backup + continuous WAL archive<br/>(point-in-time restore, monthly restore test)")]
+    STB["OPTIONAL warm standby:<br/>small k3s cluster, CloudNativePG replica cluster"]
+  end
+
+  KEY[("Sealing private key backup<br/>password manager / vault<br/>(separate from DB backups)")]
+
+  U -->|"HTTPS"| DNS --> ING --> SVC
+  SVC -->|"load-balanced, Ready Pods only"| A1
+  SVC --> A2
+  SVC --> A3
+  A1 -->|"SQL"| RW
+  A2 --> RW
+  A3 --> RW
+  RW --> P1
+  SEC -.->|"secretKeyRef"| A1
+  P1 --- V1
+  P2 --- V2
+  P3 --- V3
+  P1 -->|"streaming replication"| P2
+  P1 -->|"streaming replication"| P3
+  P1 ==>|"WAL archiving + base backups<br/>(Barman Cloud Plugin)"| OBJ
+  OBJ -.->|"WAL replay"| STB
+  DNS -.->|"site lost: promote standby, switch DNS"| STB
+  SEC -.->|"key exported after each renewal"| KEY
+
+  subgraph LEGEND["Legend"]
+    direction LR
+    LV["verified in my Lab 42/52 setup"]
+    LP["proposed change"]
+    LO["optional"]
+  end
+
+  classDef verified fill:#d8f0d8,stroke:#2e7d32,color:#000
+  classDef proposed fill:#ffe9cc,stroke:#e65100,stroke-dasharray:5 3,color:#000
+  classDef optional fill:#eeeeee,stroke:#616161,stroke-dasharray:2 2,color:#000
+  class SVC,A1,A2,A3,LV verified
+  class DNS,ING,RW,SEC,P1,P2,P3,V1,V2,V3,OBJ,KEY,LP proposed
+  class STB,LO optional

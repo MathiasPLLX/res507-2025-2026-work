@@ -18,11 +18,27 @@ services:
     build:
       context: ..
       dockerfile: docker/Dockerfile
+
+    # Override the image's default command and start with nodemon.
+    command: npm run dev
+
     environment:
       PORT: 3000
       HOST: 0.0.0.0
       DATABASE_URL: postgres://postgres:postgres@db:5432/postgres
       FORCE_COLOR: "1"
+
+    volumes:
+      # Mount the local source so saved changes appear in the container.
+      - ../app:/app
+
+      # Keep the image's installed dependencies inside the container.
+      # Otherwise, the bind mount above would hide /app/node_modules.
+      - /app/node_modules
+
+    # Run the development command from the mounted application directory.
+    working_dir: /app
+
     ports:
       - "3000:3000"
     depends_on:
@@ -31,3 +47,4 @@ services:
 
 volumes:
   pgdata:
+

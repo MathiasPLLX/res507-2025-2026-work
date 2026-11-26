@@ -1,0 +1,62 @@
+%%{init: {"flowchart": {"defaultRenderer": "elk"}}}%%
+flowchart TB
+  U["Users"]
+  DNS["DNS quote.example.com"]
+  ONCALL["On-call<br/>(email / chat notification)"]
+
+  subgraph CLOUD["Cloud provider (off-site, same as backups)"]
+    UP["External uptime check<br/>GET https://quote.example.com/health<br/>every minute, from outside the site"]
+  end
+
+  subgraph SITE["On-prem site: k3s cluster, 3 nodes"]
+    ING["Ingress (Traefik) + TLS"]
+    SVC["Service quote-app"]
+
+    subgraph SCALE["Scaling"]
+      HPA["HorizontalPodAutoscaler<br/>min 3 / max 6 replicas<br/>target: CPU vs requests"]
+      MS["metrics-server<br/>(bundled with k3s)"]
+    end
+
+    DEP["Deployment quote-app<br/>RollingUpdate maxUnavailable 0, maxSurge 1<br/>rollback: kubectl rollout undo"]
+    PODS["app Pods (3 to 6)<br/>one per node at minimum"]
+
+    POOL["OPTIONAL PgBouncer Pooler<br/>(CloudNativePG Pooler)<br/>only if connections near the limit"]
+    RW["Service quote-db-rw"]
+    PG["CloudNativePG Cluster<br/>primary + 2 replicas"]
+
+    subgraph MON["Monitoring: kube-prometheus-stack"]
+      PROM["Prometheus<br/>scrapes Pods, nodes, CloudNativePG"]
+      AM["Alertmanager<br/>error rate, latency, Pods not Ready,<br/>failover, WAL archiving failed,<br/>last backup older than 25 h, disk usage"]
+      GRAF["Grafana dashboards<br/>(watched after each rollout)"]
+    end
+  end
+
+  U --> DNS --> ING --> SVC --> PODS
+  DEP -->|"manages"| PODS
+  MS -->|"CPU usage"| HPA
+  HPA -->|"sets replicas"| DEP
+  PODS -.->|"optional path"| POOL -.-> RW
+  PODS -->|"default path"| RW
+  RW --> PG
+
+  PROM -->|"scrape"| PODS
+  PROM -->|"scrape: health, replication,<br/>archiving status"| PG
+  PROM --> AM
+  PROM --> GRAF
+  AM -->|"alert"| ONCALL
+  UP -->|"probe"| DNS
+  UP -->|"alert even if the site is down"| ONCALL
+
+  subgraph LEGEND["Legend"]
+    direction LR
+    LB["already in the main diagram"]
+    LA["added for operations (Section 3)"]
+    LO["optional"]
+  end
+
+  classDef base fill:#eeeeee,stroke:#9e9e9e,color:#555
+  classDef added fill:#ffe9cc,stroke:#e65100,stroke-width:2px,color:#000
+  classDef optional fill:#e3f2fd,stroke:#1565c0,stroke-dasharray:3 3,color:#000
+  class U,DNS,ING,SVC,PODS,RW,PG,LB base
+  class HPA,MS,DEP,PROM,AM,GRAF,UP,ONCALL,LA added
+  class POOL,LO optional
